@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "UdacityProject"
+  },
+  {
+    "ParameterKey": "AppServerImageId",
+    "ParameterValue": "ami-01fd3b69ad00fd21c"
+  },
+  {
+    "ParameterKey": "AppServerInstanceType",
+    "ParameterValue": "t2.medium"
+  }
+]

@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  Olawale Akin-Odanye / Udacity Project: Provisioning Servers and auto scaling group
+
+Parameters: 
+  EnvironmentName:
+    Type: String
+    Description: The environment for the entire stacks
+
+  AppServerImageId:
+    Type: String
+    Description: Image ID of the Server we need
+
+  AppServerInstanceType:
+    Type: String
+    Description: Instance Tyoe of the of the Server we need
+
+Resources: 
+  # Security Group For each instance of the auto scaling group
+  AppSecurityGrp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows inbound traffic on port 80
+      VpcId: 
+        Fn::ImportValue: 
+          !Sub ${EnvironmentName}-VPC
+      SecurityGroupEgress:
+        - FromPort: 0
+          ToPort: 65535
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - FromPort: 80
+          ToPort: 80
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+
+  # Configuration to be used when creating prospective ec2 instances
+  AppLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "it works! Udagram, Udacity" > index.html
+      LaunchConfigurationName: AppServerLaunchConfig
+      AssociatePublicIpAddress: false
+      ImageId: !Ref AppServerImageId
+      InstanceType: !Ref AppServerInstanceType
+      SecurityGroups:
+        - !Ref AppSecurityGrp
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+
+  # Application AutoScaling group related resources
+  AppTargetGrp:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      VpcId: 
+        Fn::ImportValue: 
+          !Sub ${EnvironmentName}-VPC
+
+  AppServerAutoScalingGrp:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - AppLaunchConfiguration
+    Properties:
+      AutoScalingGroupName: AppAutoScalingGroup
+      AvailabilityZones: 
+        - !Select [0, !GetAZs ""]
+        - !Select [1, !GetAZs ""]
+      DesiredCapacity: '4'
+      MaxSize: '4'
+      MinSize: '4'
+      LaunchConfigurationName: AppServerLaunchConfig
+      VPCZoneIdentifier: 
+        - Fn::ImportValue: 
+            !Sub ${EnvironmentName}-PRIV-NET-1
+        - Fn::ImportValue: 
+            !Sub ${EnvironmentName}-PRIV-NET-2
+      TargetGroupARNs:
+        - !Ref AppTargetGrp
+
+  # Application Load Balancer related resources
+  AppLoadBalancerSecGrp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows http requests through our load balancer
+      VpcId: 
+        Fn::ImportValue: 
+          !Sub ${EnvironmentName}-VPC
+      SecurityGroupEgress:
+        - FromPort: 80
+          ToPort: 80
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - FromPort: 80
+          ToPort: 80
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: ApplicationLoadBalancer
+      
+      SecurityGroups:
+        - !Ref AppLoadBalancerSecGrp
+      Subnets: 
+        - Fn::ImportValue: 
+            !Sub ${EnvironmentName}-PUB-NET-1
+        - Fn::ImportValue: 
+            !Sub ${EnvironmentName}-PUB-NET-2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-APP-LB
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGrp
+
+  AppLBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref 'AppTargetGrp'
+        Conditions:
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref 'Listener'
+        Priority: 1
+
+Outputs:
+  LoadBalancerDns:
+    Description: Address of sample website
+    Value: !Join [ "", [ "http://", !GetAtt AppLoadBalancer.DNSName ] ]
+    Export:
+      Name: !Sub ${EnvironmentName}-LB-DNS
